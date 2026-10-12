@@ -4,11 +4,10 @@ Reusable GitHub Actions workflows for Docker image publishing and Coolify deploy
 
 ## Repository layout
 
-- `.github/workflows/release.yml`: orchestrates change detection, builds, promotion, and deployments.
+- `.github/workflows/release.yml`: orchestrates builds, promotion, and deployments.
 - `.github/workflows/build-images.yml`: reusable image build/publish workflow.
 - `.github/workflows/promote-release.yml`: reusable image promotion workflow (SHA tag -> release tag).
 - `.github/workflows/deploy-environment.yml`: reusable rendering, validation, and publishing workflow.
-- `scripts/detect-changes.sh`: computes build/deploy relevance from git changes.
 - `scripts/render-deployment.sh`: renders complete environment directories by replacing `@@IMAGE_VERSION@@`.
 - `scripts/validate-deployment.sh`: YAML + Compose validation and image reference checks.
 - `projects/`: central rendered deployment state consumed by Coolify.
@@ -26,9 +25,7 @@ Application repositories should call `release.yml` from a push/tag workflow. Thi
 - `deployment-target-root` (default `projects`)
 - `compose-file` (default `docker-compose.yml`)
 - `images` (JSON image matrix)
-- `shared-watch-paths-json` (optional JSON array)
 - `global-build-args-json` (optional JSON object)
-- `previous-sha` (optional)
 
 Secrets:
 
@@ -44,7 +41,6 @@ Secrets:
     "context": "./services/api",
     "dockerfile": "./services/api/Dockerfile",
     "suffix": "-api",
-    "watch_paths": ["services/api", "shared"],
     "target": "runtime",
     "build_args": {
       "NODE_ENV": "production"
@@ -69,12 +65,6 @@ Approach B is also supported by preparing directories before calling the reusabl
 
 Do not pass arbitrary shell commands via JSON inputs. Keep required artifacts inside Docker build contexts and ensure `.dockerignore` does not exclude them.
 
-## Change detection behavior
-
-- Main branch: compares previous/current commit and emits separate image/deployment change flags.
-- Missing base history: conservative (`true` for both).
-- Tag release (`v*`): skips path-based rebuild logic; promotion verifies existing SHA images and never rebuilds.
-
 ## Deployment rendering and validation
 
 Rendering replaces `@@IMAGE_VERSION@@` in supported text files:
@@ -91,14 +81,14 @@ Validation checks:
 
 `${VAR}` and default-style interpolation such as `${LOG_LEVEL:-info}` remain untouched.
 
-## Staging/production flow
+## Staging/prod flow
 
 For version tags (`v*`):
 
 1. Promote SHA images to release tag.
 2. Render/validate `deploy/staging/`, publish to `projects/<project>/staging/`.
 3. Render/validate `deploy/prod/`, publish to `projects/<project>/prod/`.
-4. Production publish job declares `environment: production` so required reviewers gate deployment.
+4. Publish jobs always declare `environment: <input-environment>` (for example `staging` and `prod`) so required reviewers can gate the matching GitHub environment.
 
 The workflow can confirm central repository updates, but cannot reliably prove Coolify runtime health without external integration.
 
@@ -143,7 +133,6 @@ jobs:
       compose-file: docker-compose.yml
       images: >-
         [{"context":"./services/api","dockerfile":"./services/api/Dockerfile","suffix":"-api"}]
-      shared-watch-paths-json: '["shared"]'
     secrets:
       REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
       REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
