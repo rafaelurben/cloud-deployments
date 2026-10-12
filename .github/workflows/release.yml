@@ -128,9 +128,9 @@ jobs:
           deployment_source_root="${INPUT_DEPLOYMENT_SOURCE_ROOT:-deploy}"
           deployment_target_root="${INPUT_DEPLOYMENT_TARGET_ROOT:-projects}"
           compose_file="${INPUT_COMPOSE_FILE:-docker-compose.yml}"
-          images="${INPUT_IMAGES:-${IMAGES:-}}"
-          shared_watch_paths_json="${INPUT_SHARED_WATCH_PATHS_JSON:-[]}"
-          global_build_args_json="${INPUT_GLOBAL_BUILD_ARGS_JSON:-{}}"
+          images="$(printf '%s' "${INPUT_IMAGES:-${IMAGES:-}}" | tr -d '\r\n')"
+          shared_watch_paths_json="$(printf '%s' "${INPUT_SHARED_WATCH_PATHS_JSON:-[]}" | tr -d '\r\n')"
+          global_build_args_json="$(printf '%s' "${INPUT_GLOBAL_BUILD_ARGS_JSON:-{}}" | tr -d '\r\n')"
           previous_sha="${INPUT_PREVIOUS_SHA:-$EVENT_BEFORE}"
 
           test -n "$project_name"
