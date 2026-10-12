@@ -4,6 +4,6 @@
     "local>rafaelurben/renovate-config"
   ],
   "ignorePaths": [
-    "project/**"
+    "projects/**"
   ]
 }
