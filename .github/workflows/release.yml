@@ -38,36 +38,6 @@ on:
         required: true
       DEPLOYMENT_TOKEN:
         required: true
-  workflow_dispatch:
-    inputs:
-      project-name:
-        required: true
-        type: string
-      registry-host:
-        required: true
-        type: string
-      deployment-repository:
-        required: true
-        type: string
-      deployment-source-root:
-        required: false
-        type: string
-        default: deploy
-      deployment-target-root:
-        required: false
-        type: string
-        default: projects
-      compose-file:
-        required: false
-        type: string
-        default: docker-compose.yml
-      images:
-        required: true
-        type: string
-      global-build-args-json:
-        required: false
-        type: string
-        default: '{}'
 
 concurrency:
   group: release-${{ github.repository }}-${{ github.ref_name }}
