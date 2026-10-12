@@ -27,18 +27,10 @@ on:
       images:
         required: true
         type: string
-      shared-watch-paths-json:
-        required: false
-        type: string
-        default: '[]'
       global-build-args-json:
         required: false
         type: string
         default: '{}'
-      previous-sha:
-        required: false
-        type: string
-        default: ''
     secrets:
       REGISTRY_USERNAME:
         required: true
@@ -72,10 +64,6 @@ on:
       images:
         required: true
         type: string
-      shared-watch-paths-json:
-        required: false
-        type: string
-        default: '[]'
       global-build-args-json:
         required: false
         type: string
@@ -99,9 +87,7 @@ jobs:
       deployment_target_root: ${{ steps.resolve.outputs.deployment_target_root }}
       compose_file: ${{ steps.resolve.outputs.compose_file }}
       images: ${{ steps.resolve.outputs.images }}
-      shared_watch_paths_json: ${{ steps.resolve.outputs.shared_watch_paths_json }}
       global_build_args_json: ${{ steps.resolve.outputs.global_build_args_json }}
-      previous_sha: ${{ steps.resolve.outputs.previous_sha }}
       image_repositories_json: ${{ steps.resolve.outputs.image_repositories_json }}
     steps:
       - name: Resolve input values
@@ -114,10 +100,7 @@ jobs:
           INPUT_DEPLOYMENT_TARGET_ROOT: ${{ inputs.deployment-target-root }}
           INPUT_COMPOSE_FILE: ${{ inputs.compose-file }}
           INPUT_IMAGES: ${{ inputs.images }}
-          INPUT_SHARED_WATCH_PATHS_JSON: ${{ inputs.shared-watch-paths-json }}
           INPUT_GLOBAL_BUILD_ARGS_JSON: ${{ inputs.global-build-args-json }}
-          INPUT_PREVIOUS_SHA: ${{ inputs.previous-sha }}
-          EVENT_BEFORE: ${{ github.event.before }}
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
@@ -129,14 +112,16 @@ jobs:
           deployment_target_root="${INPUT_DEPLOYMENT_TARGET_ROOT:-projects}"
           compose_file="${INPUT_COMPOSE_FILE:-docker-compose.yml}"
           images="$(printf '%s' "${INPUT_IMAGES:-${IMAGES:-}}" | tr -d '\r\n')"
-          shared_watch_paths_json="$(printf '%s' "${INPUT_SHARED_WATCH_PATHS_JSON}" | tr -d '\r\n')"
           global_build_args_json="$(printf '%s' "${INPUT_GLOBAL_BUILD_ARGS_JSON}" | tr -d '\r\n')"
-          previous_sha="${INPUT_PREVIOUS_SHA:-$EVENT_BEFORE}"
 
           test -n "$project_name"
           test -n "$registry_host"
           test -n "$deployment_repository"
           test -n "$images"
+          if [[ "$registry_host" == http://* || "$registry_host" == https://* ]]; then
+            echo "registry-host must not include protocol (http:// or https://)" >&2
+            exit 1
+          fi
 
           if ! jq -e 'type == "array"' >/dev/null <<<"$images"; then
             echo "images must be a JSON array" >&2
@@ -165,55 +150,14 @@ jobs:
             echo "deployment_target_root=$deployment_target_root"
             echo "compose_file=$compose_file"
             echo "images=$images"
-            echo "shared_watch_paths_json=$shared_watch_paths_json"
             echo "global_build_args_json=$global_build_args_json"
-            echo "previous_sha=$previous_sha"
             echo "image_repositories_json=$image_repositories_json"
           } >> "$GITHUB_OUTPUT"
-
-  detect_changes:
-    runs-on: ubuntu-latest
-    needs: resolve_inputs
-    if: ${{ github.ref_type != 'tag' }}
-    outputs:
-      image_changes: ${{ steps.detect.outputs.image_changes }}
-      deployment_changes: ${{ steps.detect.outputs.deployment_changes }}
-    steps:
-      - name: Checkout workflow repository
-        uses: actions/checkout@v4
-        with:
-          repository: rafaelurben/cloud-deployments
-          path: workflow-repo
-
-      - name: Checkout source repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          path: source-repo
-
-      - name: Detect relevant changes
-        id: detect
-        working-directory: source-repo
-        run: |
-          set -euo pipefail
-          script_path="../workflow-repo/scripts/detect-changes.sh"
-          result="$("$script_path" \
-            --base "${{ needs.resolve_inputs.outputs.previous_sha }}" \
-            --head "${{ github.sha }}" \
-            --images-json '${{ needs.resolve_inputs.outputs.images }}' \
-            --deployment-source-root "${{ needs.resolve_inputs.outputs.deployment_source_root }}" \
-            --shared-watch-paths-json '${{ needs.resolve_inputs.outputs.shared_watch_paths_json }}')"
-
-          echo "$result"
-          while IFS= read -r line; do
-            echo "$line" >> "$GITHUB_OUTPUT"
-          done <<<"$result"
 
   build_images:
     needs:
       - resolve_inputs
-      - detect_changes
-    if: ${{ github.ref_type != 'tag' && needs.detect_changes.outputs.image_changes == 'true' }}
+    if: ${{ github.ref_type != 'tag' }}
     uses: ./.github/workflows/build-images.yml
     with:
       registry-host: ${{ needs.resolve_inputs.outputs.registry_host }}
@@ -227,9 +171,8 @@ jobs:
   deploy_dev:
     needs:
       - resolve_inputs
-      - detect_changes
       - build_images
-    if: ${{ always() && github.ref_type != 'tag' && (needs.detect_changes.outputs.deployment_changes == 'true' || needs.detect_changes.outputs.image_changes == 'true') && (needs.detect_changes.outputs.image_changes != 'true' || needs.build_images.result == 'success') }}
+    if: ${{ github.ref_type != 'tag' && needs.build_images.result == 'success' }}
     uses: ./.github/workflows/deploy-environment.yml
     with:
       project-name: ${{ needs.resolve_inputs.outputs.project_name }}

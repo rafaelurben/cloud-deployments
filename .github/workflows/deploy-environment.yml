@@ -141,52 +141,10 @@ jobs:
           name: ${{ steps.meta.outputs.artifact_name }}
           path: rendered/
 
-  publish_nonprod:
-    if: ${{ inputs.environment != 'prod' }}
+  publish:
     runs-on: ubuntu-latest
     needs: render_validate
-    concurrency:
-      group: deploy-${{ inputs.deployment-repository }}-${{ inputs.project-name }}-${{ inputs.environment }}
-      cancel-in-progress: false
-    steps:
-      - name: Checkout deployment repository
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ inputs.deployment-repository }}
-          token: ${{ secrets.DEPLOYMENT_TOKEN }}
-          fetch-depth: 0
-
-      - name: Download rendered directory
-        uses: actions/download-artifact@v4.1.3
-        with:
-          name: ${{ needs.render_validate.outputs.artifact_name }}
-          path: rendered
-
-      - name: Publish environment
-        env:
-          TARGET_DIR: ${{ inputs.deployment-target-root }}/${{ inputs.project-name }}/${{ inputs.environment }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$TARGET_DIR"
-          rsync -a --delete rendered/ "$TARGET_DIR"/
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "$TARGET_DIR"
-          if git diff --cached --quiet; then
-            echo "No deployment changes to commit"
-            exit 0
-          fi
-
-          git commit -m "deploy(${{ inputs.project-name }}/${{ inputs.environment }}): ${{ inputs.image-version }} from ${{ needs.render_validate.outputs.source_sha }}"
-          git pull --rebase
-          git push
-
-  publish_prod:
-    if: ${{ inputs.environment == 'prod' }}
-    runs-on: ubuntu-latest
-    needs: render_validate
-    environment: production
+    environment: ${{ inputs.environment }}
     concurrency:
       group: deploy-${{ inputs.deployment-repository }}-${{ inputs.project-name }}-${{ inputs.environment }}
       cancel-in-progress: false
