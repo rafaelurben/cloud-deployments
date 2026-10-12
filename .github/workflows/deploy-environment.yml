@@ -76,7 +76,7 @@ jobs:
           done
 
       - name: Checkout workflow repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: rafaelurben/cloud-deployments
           path: workflow-repo
@@ -99,7 +99,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Checkout source repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ steps.source.outputs.repo }}
           ref: ${{ steps.source.outputs.ref }}
@@ -150,7 +150,7 @@ jobs:
       cancel-in-progress: false
     steps:
       - name: Checkout deployment repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ inputs.deployment-repository }}
           token: ${{ secrets.DEPLOYMENT_TOKEN }}
