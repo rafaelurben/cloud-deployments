@@ -32,6 +32,9 @@ on:
         description: Published image tag
         value: ${{ inputs.commit-sha }}
 
+permissions:
+  contents: read
+
 jobs:
   plan:
     runs-on: ubuntu-latest

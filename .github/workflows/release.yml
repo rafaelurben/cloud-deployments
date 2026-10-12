@@ -90,6 +90,9 @@ concurrency:
   group: release-${{ github.repository }}-${{ github.ref_name }}
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   resolve_inputs:
     runs-on: ubuntu-latest
