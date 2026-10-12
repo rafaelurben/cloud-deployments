@@ -1,0 +1,93 @@
+name: Promote release images
+
+on:
+  workflow_call:
+    inputs:
+      registry-host:
+        required: true
+        type: string
+      images:
+        required: true
+        type: string
+      release-version:
+        required: true
+        type: string
+      commit-sha:
+        required: true
+        type: string
+    secrets:
+      REGISTRY_USERNAME:
+        required: true
+      REGISTRY_PASSWORD:
+        required: true
+    outputs:
+      image-repositories-json:
+        value: ${{ jobs.promote.outputs.image_repositories_json }}
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    outputs:
+      image_repositories_json: ${{ steps.plan.outputs.image_repositories_json }}
+    steps:
+      - name: Validate release version
+        run: |
+          set -euo pipefail
+          if [[ ! "${{ inputs.release-version }}" =~ ^v[0-9A-Za-z._-]+$ ]]; then
+            echo "Invalid release version format" >&2
+            exit 1
+          fi
+
+      - name: Build expected image list
+        id: plan
+        env:
+          IMAGES_JSON: ${{ inputs.images }}
+          REGISTRY_HOST: ${{ inputs.registry-host }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          if ! jq -e 'type == "array"' >/dev/null <<<"$IMAGES_JSON"; then
+            echo "images input must be a JSON array" >&2
+            exit 1
+          fi
+
+          owner="${REPOSITORY%%/*}"
+          repo="${REPOSITORY##*/}"
+          owner="$(echo "$owner" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g')"
+          repo="$(echo "$repo" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g')"
+
+          repos=$(jq -c --arg registry "$REGISTRY_HOST" --arg owner "$owner" --arg repo "$repo" '
+            map(
+              .suffix = (.suffix // "")
+              | if (.suffix|test("^(-[a-z0-9]+([._-][a-z0-9]+)*)?$")|not) then
+                  error("Invalid suffix: \(.suffix)")
+                else . end
+              | ($registry + "/" + $owner + "/" + $repo + .suffix)
+            )
+          ' <<<"$IMAGES_JSON")
+
+          echo "image_repositories_json=$repos" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ inputs.registry-host }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Verify SHA images exist and retag
+        env:
+          COMMIT_SHA: ${{ inputs.commit-sha }}
+          RELEASE_VERSION: ${{ inputs.release-version }}
+          IMAGE_REPOSITORIES_JSON: ${{ steps.plan.outputs.image_repositories_json }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r image; do
+            [[ -z "$image" ]] && continue
+            docker buildx imagetools inspect "$image:$COMMIT_SHA" >/dev/null
+            docker buildx imagetools create "$image:$COMMIT_SHA" --tag "$image:$RELEASE_VERSION"
+          done < <(jq -r '.[]' <<<"$IMAGE_REPOSITORIES_JSON")

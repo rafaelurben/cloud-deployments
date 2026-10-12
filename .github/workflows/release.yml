@@ -1,0 +1,297 @@
+name: Release Docker deployment
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_call:
+    inputs:
+      project-name:
+        required: true
+        type: string
+      registry-host:
+        required: true
+        type: string
+      deployment-repository:
+        required: true
+        type: string
+      deployment-source-root:
+        required: false
+        type: string
+        default: deploy
+      deployment-target-root:
+        required: false
+        type: string
+        default: projects
+      compose-file:
+        required: false
+        type: string
+        default: docker-compose.yml
+      images:
+        required: true
+        type: string
+      shared-watch-paths-json:
+        required: false
+        type: string
+        default: '[]'
+      global-build-args-json:
+        required: false
+        type: string
+        default: '{}'
+      previous-sha:
+        required: false
+        type: string
+        default: ''
+    secrets:
+      REGISTRY_USERNAME:
+        required: true
+      REGISTRY_PASSWORD:
+        required: true
+      DEPLOYMENT_TOKEN:
+        required: true
+  workflow_dispatch:
+    inputs:
+      project-name:
+        required: true
+        type: string
+      registry-host:
+        required: true
+        type: string
+      deployment-repository:
+        required: true
+        type: string
+      deployment-source-root:
+        required: false
+        type: string
+        default: deploy
+      deployment-target-root:
+        required: false
+        type: string
+        default: projects
+      compose-file:
+        required: false
+        type: string
+        default: docker-compose.yml
+      images:
+        required: true
+        type: string
+      shared-watch-paths-json:
+        required: false
+        type: string
+        default: '[]'
+      global-build-args-json:
+        required: false
+        type: string
+        default: '{}'
+
+concurrency:
+  group: release-${{ github.repository }}-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  resolve_inputs:
+    runs-on: ubuntu-latest
+    outputs:
+      project_name: ${{ steps.resolve.outputs.project_name }}
+      registry_host: ${{ steps.resolve.outputs.registry_host }}
+      deployment_repository: ${{ steps.resolve.outputs.deployment_repository }}
+      deployment_source_root: ${{ steps.resolve.outputs.deployment_source_root }}
+      deployment_target_root: ${{ steps.resolve.outputs.deployment_target_root }}
+      compose_file: ${{ steps.resolve.outputs.compose_file }}
+      images: ${{ steps.resolve.outputs.images }}
+      shared_watch_paths_json: ${{ steps.resolve.outputs.shared_watch_paths_json }}
+      global_build_args_json: ${{ steps.resolve.outputs.global_build_args_json }}
+      previous_sha: ${{ steps.resolve.outputs.previous_sha }}
+      image_repositories_json: ${{ steps.resolve.outputs.image_repositories_json }}
+    steps:
+      - name: Resolve input values
+        id: resolve
+        env:
+          INPUT_PROJECT_NAME: ${{ inputs.project-name }}
+          INPUT_REGISTRY_HOST: ${{ inputs.registry-host }}
+          INPUT_DEPLOYMENT_REPOSITORY: ${{ inputs.deployment-repository }}
+          INPUT_DEPLOYMENT_SOURCE_ROOT: ${{ inputs.deployment-source-root }}
+          INPUT_DEPLOYMENT_TARGET_ROOT: ${{ inputs.deployment-target-root }}
+          INPUT_COMPOSE_FILE: ${{ inputs.compose-file }}
+          INPUT_IMAGES: ${{ inputs.images }}
+          INPUT_SHARED_WATCH_PATHS_JSON: ${{ inputs.shared-watch-paths-json }}
+          INPUT_GLOBAL_BUILD_ARGS_JSON: ${{ inputs.global-build-args-json }}
+          INPUT_PREVIOUS_SHA: ${{ inputs.previous-sha }}
+          EVENT_BEFORE: ${{ github.event.before }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          project_name="${INPUT_PROJECT_NAME:-${PROJECT_NAME:-}}"
+          registry_host="${INPUT_REGISTRY_HOST:-${REGISTRY_HOST:-}}"
+          deployment_repository="${INPUT_DEPLOYMENT_REPOSITORY:-${DEPLOYMENT_REPOSITORY:-}}"
+          deployment_source_root="${INPUT_DEPLOYMENT_SOURCE_ROOT:-deploy}"
+          deployment_target_root="${INPUT_DEPLOYMENT_TARGET_ROOT:-projects}"
+          compose_file="${INPUT_COMPOSE_FILE:-docker-compose.yml}"
+          images="${INPUT_IMAGES:-${IMAGES:-}}"
+          shared_watch_paths_json="${INPUT_SHARED_WATCH_PATHS_JSON:-[]}"
+          global_build_args_json="${INPUT_GLOBAL_BUILD_ARGS_JSON:-{}}"
+          previous_sha="${INPUT_PREVIOUS_SHA:-$EVENT_BEFORE}"
+
+          test -n "$project_name"
+          test -n "$registry_host"
+          test -n "$deployment_repository"
+          test -n "$images"
+
+          if ! jq -e 'type == "array"' >/dev/null <<<"$images"; then
+            echo "images must be a JSON array" >&2
+            exit 1
+          fi
+
+          owner="${REPOSITORY%%/*}"
+          repo="${REPOSITORY##*/}"
+          owner="$(echo "$owner" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g')"
+          repo="$(echo "$repo" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g')"
+          image_repositories_json="$(jq -c --arg registry "$registry_host" --arg owner "$owner" --arg repo "$repo" '
+            map(
+              .suffix = (.suffix // "")
+              | if (.suffix|test("^(-[a-z0-9]+([._-][a-z0-9]+)*)?$")|not) then
+                  error("Invalid suffix: \(.suffix)")
+                else . end
+              | ($registry + "/" + $owner + "/" + $repo + .suffix)
+            )
+          ' <<<"$images")"
+
+          {
+            echo "project_name=$project_name"
+            echo "registry_host=$registry_host"
+            echo "deployment_repository=$deployment_repository"
+            echo "deployment_source_root=$deployment_source_root"
+            echo "deployment_target_root=$deployment_target_root"
+            echo "compose_file=$compose_file"
+            echo "images=$images"
+            echo "shared_watch_paths_json=$shared_watch_paths_json"
+            echo "global_build_args_json=$global_build_args_json"
+            echo "previous_sha=$previous_sha"
+            echo "image_repositories_json=$image_repositories_json"
+          } >> "$GITHUB_OUTPUT"
+
+  detect_changes:
+    runs-on: ubuntu-latest
+    needs: resolve_inputs
+    if: ${{ github.ref_type != 'tag' }}
+    outputs:
+      image_changes: ${{ steps.detect.outputs.image_changes }}
+      deployment_changes: ${{ steps.detect.outputs.deployment_changes }}
+    steps:
+      - name: Checkout workflow repository
+        uses: actions/checkout@v4
+        with:
+          repository: rafaelurben/cloud-deployments
+          path: workflow-repo
+
+      - name: Checkout source repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          path: source-repo
+
+      - name: Detect relevant changes
+        id: detect
+        working-directory: source-repo
+        run: |
+          set -euo pipefail
+          script_path="../workflow-repo/scripts/detect-changes.sh"
+          result="$("$script_path" \
+            --base "${{ needs.resolve_inputs.outputs.previous_sha }}" \
+            --head "${{ github.sha }}" \
+            --images-json '${{ needs.resolve_inputs.outputs.images }}' \
+            --deployment-source-root "${{ needs.resolve_inputs.outputs.deployment_source_root }}" \
+            --shared-watch-paths-json '${{ needs.resolve_inputs.outputs.shared_watch_paths_json }}')"
+
+          echo "$result"
+          while IFS= read -r line; do
+            echo "$line" >> "$GITHUB_OUTPUT"
+          done <<<"$result"
+
+  build_images:
+    needs:
+      - resolve_inputs
+      - detect_changes
+    if: ${{ github.ref_type != 'tag' && needs.detect_changes.outputs.image_changes == 'true' }}
+    uses: ./.github/workflows/build-images.yml
+    with:
+      registry-host: ${{ needs.resolve_inputs.outputs.registry_host }}
+      images: ${{ needs.resolve_inputs.outputs.images }}
+      commit-sha: ${{ github.sha }}
+      global-build-args-json: ${{ needs.resolve_inputs.outputs.global_build_args_json }}
+    secrets:
+      REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+      REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+
+  deploy_dev:
+    needs:
+      - resolve_inputs
+      - detect_changes
+      - build_images
+    if: ${{ always() && github.ref_type != 'tag' && (needs.detect_changes.outputs.deployment_changes == 'true' || needs.detect_changes.outputs.image_changes == 'true') && (needs.detect_changes.outputs.image_changes != 'true' || needs.build_images.result == 'success') }}
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      project-name: ${{ needs.resolve_inputs.outputs.project_name }}
+      environment: dev
+      image-version: ${{ github.sha }}
+      deployment-repository: ${{ needs.resolve_inputs.outputs.deployment_repository }}
+      deployment-source-root: ${{ needs.resolve_inputs.outputs.deployment_source_root }}
+      deployment-target-root: ${{ needs.resolve_inputs.outputs.deployment_target_root }}
+      compose-file: ${{ needs.resolve_inputs.outputs.compose_file }}
+      expected-images-json: ${{ needs.resolve_inputs.outputs.image_repositories_json }}
+    secrets:
+      DEPLOYMENT_TOKEN: ${{ secrets.DEPLOYMENT_TOKEN }}
+
+  promote_release:
+    needs:
+      - resolve_inputs
+    if: ${{ github.ref_type == 'tag' }}
+    uses: ./.github/workflows/promote-release.yml
+    with:
+      registry-host: ${{ needs.resolve_inputs.outputs.registry_host }}
+      images: ${{ needs.resolve_inputs.outputs.images }}
+      release-version: ${{ github.ref_name }}
+      commit-sha: ${{ github.sha }}
+    secrets:
+      REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+      REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+
+  deploy_staging:
+    needs:
+      - resolve_inputs
+      - promote_release
+    if: ${{ github.ref_type == 'tag' }}
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      project-name: ${{ needs.resolve_inputs.outputs.project_name }}
+      environment: staging
+      image-version: ${{ github.ref_name }}
+      deployment-repository: ${{ needs.resolve_inputs.outputs.deployment_repository }}
+      deployment-source-root: ${{ needs.resolve_inputs.outputs.deployment_source_root }}
+      deployment-target-root: ${{ needs.resolve_inputs.outputs.deployment_target_root }}
+      compose-file: ${{ needs.resolve_inputs.outputs.compose_file }}
+      expected-images-json: ${{ needs.promote_release.outputs.image-repositories-json }}
+    secrets:
+      DEPLOYMENT_TOKEN: ${{ secrets.DEPLOYMENT_TOKEN }}
+
+  deploy_prod:
+    needs:
+      - resolve_inputs
+      - promote_release
+      - deploy_staging
+    if: ${{ github.ref_type == 'tag' }}
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      project-name: ${{ needs.resolve_inputs.outputs.project_name }}
+      environment: prod
+      image-version: ${{ github.ref_name }}
+      deployment-repository: ${{ needs.resolve_inputs.outputs.deployment_repository }}
+      deployment-source-root: ${{ needs.resolve_inputs.outputs.deployment_source_root }}
+      deployment-target-root: ${{ needs.resolve_inputs.outputs.deployment_target_root }}
+      compose-file: ${{ needs.resolve_inputs.outputs.compose_file }}
+      expected-images-json: ${{ needs.promote_release.outputs.image-repositories-json }}
+    secrets:
+      DEPLOYMENT_TOKEN: ${{ secrets.DEPLOYMENT_TOKEN }}

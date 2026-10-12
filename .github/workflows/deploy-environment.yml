@@ -1,0 +1,222 @@
+name: Deploy environment directory
+
+on:
+  workflow_call:
+    inputs:
+      project-name:
+        required: true
+        type: string
+      environment:
+        required: true
+        type: string
+      image-version:
+        required: true
+        type: string
+      deployment-repository:
+        required: true
+        type: string
+      deployment-source-root:
+        required: false
+        type: string
+        default: deploy
+      deployment-target-root:
+        required: false
+        type: string
+        default: projects
+      compose-file:
+        required: false
+        type: string
+        default: docker-compose.yml
+      source-repository:
+        required: false
+        type: string
+        default: ''
+      source-ref:
+        required: false
+        type: string
+        default: ''
+      expected-images-json:
+        required: false
+        type: string
+        default: '[]'
+      text-extensions:
+        required: false
+        type: string
+        default: '.yml,.yaml,.json,.toml,.conf,.ini,.env,.properties,.sh'
+    secrets:
+      DEPLOYMENT_TOKEN:
+        required: true
+
+jobs:
+  render_validate:
+    runs-on: ubuntu-latest
+    outputs:
+      artifact_name: ${{ steps.meta.outputs.artifact_name }}
+      source_sha: ${{ steps.meta.outputs.source_sha }}
+    steps:
+      - name: Validate deployment inputs
+        run: |
+          set -euo pipefail
+          if [[ ! "${{ inputs.project-name }}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+            echo "Invalid project-name" >&2
+            exit 1
+          fi
+          if [[ ! "${{ inputs.environment }}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+            echo "Invalid environment" >&2
+            exit 1
+          fi
+          for path_part in "${{ inputs.deployment-source-root }}" "${{ inputs.deployment-target-root }}" "${{ inputs.compose-file }}"; do
+            if [[ "$path_part" == /* || "$path_part" == *".."* ]]; then
+              echo "Invalid path input: $path_part" >&2
+              exit 1
+            fi
+          done
+
+      - name: Checkout workflow repository
+        uses: actions/checkout@v4
+        with:
+          repository: rafaelurben/cloud-deployments
+          path: workflow-repo
+
+      - name: Resolve source repository and ref
+        id: source
+        run: |
+          set -euo pipefail
+          source_repo="${{ inputs.source-repository }}"
+          if [[ -z "$source_repo" ]]; then
+            source_repo="${{ github.repository }}"
+          fi
+          source_ref="${{ inputs.source-ref }}"
+          if [[ -z "$source_ref" ]]; then
+            source_ref="${{ github.sha }}"
+          fi
+          {
+            echo "repo=$source_repo"
+            echo "ref=$source_ref"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout source repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.source.outputs.repo }}
+          ref: ${{ steps.source.outputs.ref }}
+          path: source-repo
+
+      - name: Install validation dependencies
+        run: pip3 install --disable-pip-version-check pyyaml
+
+      - name: Render deployment directory
+        run: |
+          set -euo pipefail
+          mkdir -p rendered
+          workflow-repo/scripts/render-deployment.sh \
+            --source-dir "source-repo/${{ inputs.deployment-source-root }}/${{ inputs.environment }}" \
+            --target-dir rendered \
+            --image-version "${{ inputs.image-version }}" \
+            --extensions "${{ inputs.text-extensions }}"
+
+      - name: Validate rendered deployment directory
+        run: |
+          set -euo pipefail
+          workflow-repo/scripts/validate-deployment.sh \
+            --directory rendered \
+            --compose-file "${{ inputs.compose-file }}" \
+            --image-version "${{ inputs.image-version }}" \
+            --expected-images-json '${{ inputs.expected-images-json }}' \
+            --extensions "${{ inputs.text-extensions }}"
+
+      - name: Deployment metadata
+        id: meta
+        run: |
+          set -euo pipefail
+          echo "artifact_name=rendered-${{ inputs.project-name }}-${{ inputs.environment }}" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$(git -C source-repo rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload rendered directory
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.artifact_name }}
+          path: rendered/
+
+  publish_nonprod:
+    if: ${{ inputs.environment != 'prod' }}
+    runs-on: ubuntu-latest
+    needs: render_validate
+    concurrency:
+      group: deploy-${{ inputs.deployment-repository }}-${{ inputs.project-name }}-${{ inputs.environment }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout deployment repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.deployment-repository }}
+          token: ${{ secrets.DEPLOYMENT_TOKEN }}
+          fetch-depth: 0
+
+      - name: Download rendered directory
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.render_validate.outputs.artifact_name }}
+          path: rendered
+
+      - name: Publish environment
+        env:
+          TARGET_DIR: ${{ inputs.deployment-target-root }}/${{ inputs.project-name }}/${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$TARGET_DIR"
+          rsync -a --delete rendered/ "$TARGET_DIR"/
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$TARGET_DIR"
+          if git diff --cached --quiet; then
+            echo "No deployment changes to commit"
+            exit 0
+          fi
+
+          git commit -m "deploy(${{ inputs.project-name }}/${{ inputs.environment }}): ${{ inputs.image-version }} from ${{ needs.render_validate.outputs.source_sha }}"
+          git pull --rebase
+          git push
+
+  publish_prod:
+    if: ${{ inputs.environment == 'prod' }}
+    runs-on: ubuntu-latest
+    needs: render_validate
+    environment: production
+    concurrency:
+      group: deploy-${{ inputs.deployment-repository }}-${{ inputs.project-name }}-${{ inputs.environment }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout deployment repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.deployment-repository }}
+          token: ${{ secrets.DEPLOYMENT_TOKEN }}
+          fetch-depth: 0
+
+      - name: Download rendered directory
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.render_validate.outputs.artifact_name }}
+          path: rendered
+
+      - name: Publish environment
+        env:
+          TARGET_DIR: ${{ inputs.deployment-target-root }}/${{ inputs.project-name }}/${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$TARGET_DIR"
+          rsync -a --delete rendered/ "$TARGET_DIR"/
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$TARGET_DIR"
+          if git diff --cached --quiet; then
+            echo "No deployment changes to commit"
+            exit 0
+          fi
+
+          git commit -m "deploy(${{ inputs.project-name }}/${{ inputs.environment }}): ${{ inputs.image-version }} from ${{ needs.render_validate.outputs.source_sha }}"
+          git pull --rebase
+          git push
