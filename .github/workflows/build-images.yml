@@ -133,7 +133,7 @@ jobs:
 
       - name: Download prepared artifacts
         if: ${{ matrix.image.artifact_name != '' }}
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.1.3
         with:
           name: ${{ matrix.image.artifact_name }}
           path: ${{ matrix.image.context }}/${{ matrix.image.artifact_path }}

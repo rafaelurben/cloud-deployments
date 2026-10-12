@@ -157,7 +157,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download rendered directory
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.1.3
         with:
           name: ${{ needs.render_validate.outputs.artifact_name }}
           path: rendered
@@ -199,7 +199,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download rendered directory
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.1.3
         with:
           name: ${{ needs.render_validate.outputs.artifact_name }}
           path: rendered
