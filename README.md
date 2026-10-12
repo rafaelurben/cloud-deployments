@@ -41,7 +41,6 @@ Secrets:
     "context": "./services/api",
     "dockerfile": "./services/api/Dockerfile",
     "suffix": "-api",
-    "watch_paths": ["services/api", "shared"],
     "target": "runtime",
     "build_args": {
       "NODE_ENV": "production"
