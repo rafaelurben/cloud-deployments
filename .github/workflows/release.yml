@@ -1,11 +1,6 @@
 name: Release Docker deployment
 
 on:
-  push:
-    branches:
-      - main
-    tags:
-      - 'v*'
   workflow_call:
     inputs:
       project-name:
