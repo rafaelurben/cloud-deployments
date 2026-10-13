@@ -34,7 +34,7 @@ on:
       environments:
         required: false
         type: string
-        default: '{"dev":{"url":"","enabled":true},"test":{"url":"","enabled":true},"prod":{"url":"","enabled":true}}'
+        default: '{"dev":{"url":"","enabled":true},"staging":{"url":"","enabled":true},"prod":{"url":"","enabled":true}}'
     secrets:
       REGISTRY_USERNAME:
         required: true
@@ -65,8 +65,8 @@ jobs:
       image_repositories_json: ${{ steps.resolve.outputs.image_repositories_json }}
       environment_dev_url: ${{ steps.resolve.outputs.environment_dev_url }}
       environment_dev_enabled: ${{ steps.resolve.outputs.environment_dev_enabled }}
-      environment_test_url: ${{ steps.resolve.outputs.environment_test_url }}
-      environment_test_enabled: ${{ steps.resolve.outputs.environment_test_enabled }}
+      environment_staging_url: ${{ steps.resolve.outputs.environment_staging_url }}
+      environment_staging_enabled: ${{ steps.resolve.outputs.environment_staging_enabled }}
       environment_prod_url: ${{ steps.resolve.outputs.environment_prod_url }}
       environment_prod_enabled: ${{ steps.resolve.outputs.environment_prod_enabled }}
     steps:
@@ -115,17 +115,17 @@ jobs:
           fi
 
           env_dev=$(jq -e -c '.dev // {}' <<<"$environments")
-          env_test=$(jq -e -c '.test // {}' <<<"$environments")
+          env_staging=$(jq -e -c '.staging // {}' <<<"$environments")
           env_prod=$(jq -e -c '.prod // {}' <<<"$environments")
 
           env_dev_enabled=$(jq -e -r '
             .enabled // true
             | if type == "boolean" then . else error("environments.dev.enabled must be a boolean") end
           ' <<<"$env_dev")
-          env_test_enabled=$(jq -e -r '
+          env_staging_enabled=$(jq -e -r '
             .enabled // true
-            | if type == "boolean" then . else error("environments.test.enabled must be a boolean") end
-          ' <<<"$env_test")
+            | if type == "boolean" then . else error("environments.staging.enabled must be a boolean") end
+          ' <<<"$env_staging")
           env_prod_enabled=$(jq -e -r '
             .enabled // true
             | if type == "boolean" then . else error("environments.prod.enabled must be a boolean") end
@@ -135,10 +135,10 @@ jobs:
             .url // ""
             | if type == "string" then . else error("environments.dev.url must be a string") end
           ' <<<"$env_dev")
-          env_test_url=$(jq -e -r '
+          env_staging_url=$(jq -e -r '
             .url // ""
-            | if type == "string" then . else error("environments.test.url must be a string") end
-          ' <<<"$env_test")
+            | if type == "string" then . else error("environments.staging.url must be a string") end
+          ' <<<"$env_staging")
           env_prod_url=$(jq -e -r '
             .url // ""
             | if type == "string" then . else error("environments.prod.url must be a string") end
@@ -170,8 +170,8 @@ jobs:
             echo "image_repositories_json=$image_repositories_json"
             echo "environment_dev_url=$env_dev_url"
             echo "environment_dev_enabled=$env_dev_enabled"
-            echo "environment_test_url=$env_test_url"
-            echo "environment_test_enabled=$env_test_enabled"
+            echo "environment_staging_url=$env_staging_url"
+            echo "environment_staging_enabled=$env_staging_enabled"
             echo "environment_prod_url=$env_prod_url"
             echo "environment_prod_enabled=$env_prod_enabled"
           } >> "$GITHUB_OUTPUT"
@@ -223,22 +223,22 @@ jobs:
       REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
       REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
 
-  deploy_test:
+  deploy_staging:
     needs:
       - resolve_inputs
       - promote_release
-    if: ${{ github.ref_type == 'tag' && needs.resolve_inputs.outputs.environment_test_enabled == 'true' }}
+    if: ${{ github.ref_type == 'tag' && needs.resolve_inputs.outputs.environment_staging_enabled == 'true' }}
     uses: ./.github/workflows/deploy-environment.yml
     with:
       project-name: ${{ needs.resolve_inputs.outputs.project_name }}
-      environment: test
+      environment: staging
       image-version: ${{ github.ref_name }}
       deployment-repository: ${{ needs.resolve_inputs.outputs.deployment_repository }}
       deployment-source-root: ${{ needs.resolve_inputs.outputs.deployment_source_root }}
       deployment-target-root: ${{ needs.resolve_inputs.outputs.deployment_target_root }}
       compose-file: ${{ needs.resolve_inputs.outputs.compose_file }}
       expected-images-json: ${{ needs.promote_release.outputs.image-repositories-json }}
-      environment-url: ${{ needs.resolve_inputs.outputs.environment_test_url }}
+      environment-url: ${{ needs.resolve_inputs.outputs.environment_staging_url }}
     secrets:
       DEPLOYMENT_TOKEN: ${{ secrets.DEPLOYMENT_TOKEN }}
 
@@ -246,8 +246,8 @@ jobs:
     needs:
       - resolve_inputs
       - promote_release
-      - deploy_test
-    if: ${{ always() && github.ref_type == 'tag' && needs.promote_release.result == 'success' && needs.resolve_inputs.outputs.environment_prod_enabled == 'true' && (needs.deploy_test.result == 'success' || needs.deploy_test.result == 'skipped') }}
+      - deploy_staging
+    if: ${{ always() && github.ref_type == 'tag' && needs.promote_release.result == 'success' && needs.resolve_inputs.outputs.environment_prod_enabled == 'true' && (needs.deploy_staging.result == 'success' || needs.deploy_staging.result == 'skipped') }}
     uses: ./.github/workflows/deploy-environment.yml
     with:
       project-name: ${{ needs.resolve_inputs.outputs.project_name }}
