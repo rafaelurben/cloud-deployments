@@ -26,6 +26,7 @@ Application repositories should call `release.yml` from a push/tag workflow. Thi
 - `compose-file` (default `docker-compose.yml`)
 - `images` (JSON image matrix)
 - `global-build-args-json` (optional JSON object)
+- `environments` (optional JSON object, default: `{"dev":{"url":"","enabled":true},"test":{"url":"","enabled":true},"prod":{"url":"","enabled":true}}`)
 
 Secrets:
 
@@ -81,14 +82,14 @@ Validation checks:
 
 `${VAR}` and default-style interpolation such as `${LOG_LEVEL:-info}` remain untouched.
 
-## Staging/prod flow
+## Test/prod flow
 
 For version tags (`v*`):
 
 1. Promote SHA images to release tag.
-2. Render/validate `deploy/staging/`, publish to `projects/<project>/staging/`.
+2. Render/validate `deploy/test/`, publish to `projects/<project>/test/` (if enabled).
 3. Render/validate `deploy/prod/`, publish to `projects/<project>/prod/`.
-4. Publish jobs always declare `environment: <input-environment>` (for example `staging` and `prod`) so required reviewers can gate the matching GitHub environment.
+4. Publish jobs always declare `environment: <input-environment>` (for example `test` and `prod`) and can set `environment.url` from `environments.<name>.url`.
 
 The workflow can confirm central repository updates, but cannot reliably prove Coolify runtime health without external integration.
 
@@ -133,6 +134,8 @@ jobs:
       compose-file: docker-compose.yml
       images: >-
         [{"context":"./services/api","dockerfile":"./services/api/Dockerfile","suffix":"-api"}]
+      environments: >-
+        {"dev":{"url":"https://dev.example.com","enabled":true},"test":{"url":"https://test.example.com","enabled":true},"prod":{"url":"https://app.example.com","enabled":false}}
     secrets:
       REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
       REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}

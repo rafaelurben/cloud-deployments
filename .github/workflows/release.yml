@@ -31,6 +31,10 @@ on:
         required: false
         type: string
         default: '{}'
+      environments:
+        required: false
+        type: string
+        default: '{"dev":{"url":"","enabled":true},"test":{"url":"","enabled":true},"prod":{"url":"","enabled":true}}'
     secrets:
       REGISTRY_USERNAME:
         required: true
@@ -59,6 +63,12 @@ jobs:
       images: ${{ steps.resolve.outputs.images }}
       global_build_args_json: ${{ steps.resolve.outputs.global_build_args_json }}
       image_repositories_json: ${{ steps.resolve.outputs.image_repositories_json }}
+      environment_dev_url: ${{ steps.resolve.outputs.environment_dev_url }}
+      environment_dev_enabled: ${{ steps.resolve.outputs.environment_dev_enabled }}
+      environment_test_url: ${{ steps.resolve.outputs.environment_test_url }}
+      environment_test_enabled: ${{ steps.resolve.outputs.environment_test_enabled }}
+      environment_prod_url: ${{ steps.resolve.outputs.environment_prod_url }}
+      environment_prod_enabled: ${{ steps.resolve.outputs.environment_prod_enabled }}
     steps:
       - name: Resolve input values
         id: resolve
@@ -71,6 +81,7 @@ jobs:
           INPUT_COMPOSE_FILE: ${{ inputs.compose-file }}
           INPUT_IMAGES: ${{ inputs.images }}
           INPUT_GLOBAL_BUILD_ARGS_JSON: ${{ inputs.global-build-args-json }}
+          INPUT_ENVIRONMENTS: ${{ inputs.environments }}
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
@@ -83,6 +94,7 @@ jobs:
           compose_file="${INPUT_COMPOSE_FILE:-docker-compose.yml}"
           images="$(printf '%s' "${INPUT_IMAGES:-${IMAGES:-}}" | tr -d '\r\n')"
           global_build_args_json="$(printf '%s' "${INPUT_GLOBAL_BUILD_ARGS_JSON}" | tr -d '\r\n')"
+          environments="$(printf '%s' "${INPUT_ENVIRONMENTS}" | tr -d '\r\n')"
 
           test -n "$project_name"
           test -n "$registry_host"
@@ -97,6 +109,40 @@ jobs:
             echo "images must be a JSON array" >&2
             exit 1
           fi
+          if ! jq -e 'type == "object"' >/dev/null <<<"$environments"; then
+            echo "environments must be a JSON object" >&2
+            exit 1
+          fi
+
+          env_dev=$(jq -e -c '.dev // {}' <<<"$environments")
+          env_test=$(jq -e -c '.test // {}' <<<"$environments")
+          env_prod=$(jq -e -c '.prod // {}' <<<"$environments")
+
+          env_dev_enabled=$(jq -e -r '
+            .enabled // true
+            | if type == "boolean" then . else error("environments.dev.enabled must be a boolean") end
+          ' <<<"$env_dev")
+          env_test_enabled=$(jq -e -r '
+            .enabled // true
+            | if type == "boolean" then . else error("environments.test.enabled must be a boolean") end
+          ' <<<"$env_test")
+          env_prod_enabled=$(jq -e -r '
+            .enabled // true
+            | if type == "boolean" then . else error("environments.prod.enabled must be a boolean") end
+          ' <<<"$env_prod")
+
+          env_dev_url=$(jq -e -r '
+            .url // ""
+            | if type == "string" then . else error("environments.dev.url must be a string") end
+          ' <<<"$env_dev")
+          env_test_url=$(jq -e -r '
+            .url // ""
+            | if type == "string" then . else error("environments.test.url must be a string") end
+          ' <<<"$env_test")
+          env_prod_url=$(jq -e -r '
+            .url // ""
+            | if type == "string" then . else error("environments.prod.url must be a string") end
+          ' <<<"$env_prod")
 
           owner="${REPOSITORY%%/*}"
           repo="${REPOSITORY##*/}"
@@ -122,6 +168,12 @@ jobs:
             echo "images=$images"
             echo "global_build_args_json=$global_build_args_json"
             echo "image_repositories_json=$image_repositories_json"
+            echo "environment_dev_url=$env_dev_url"
+            echo "environment_dev_enabled=$env_dev_enabled"
+            echo "environment_test_url=$env_test_url"
+            echo "environment_test_enabled=$env_test_enabled"
+            echo "environment_prod_url=$env_prod_url"
+            echo "environment_prod_enabled=$env_prod_enabled"
           } >> "$GITHUB_OUTPUT"
 
   build_images:
@@ -142,7 +194,7 @@ jobs:
     needs:
       - resolve_inputs
       - build_images
-    if: ${{ github.ref_type != 'tag' && needs.build_images.result == 'success' }}
+    if: ${{ github.ref_type != 'tag' && needs.build_images.result == 'success' && needs.resolve_inputs.outputs.environment_dev_enabled == 'true' }}
     uses: ./.github/workflows/deploy-environment.yml
     with:
       project-name: ${{ needs.resolve_inputs.outputs.project_name }}
@@ -153,6 +205,7 @@ jobs:
       deployment-target-root: ${{ needs.resolve_inputs.outputs.deployment_target_root }}
       compose-file: ${{ needs.resolve_inputs.outputs.compose_file }}
       expected-images-json: ${{ needs.resolve_inputs.outputs.image_repositories_json }}
+      environment-url: ${{ needs.resolve_inputs.outputs.environment_dev_url }}
     secrets:
       DEPLOYMENT_TOKEN: ${{ secrets.DEPLOYMENT_TOKEN }}
 
@@ -170,21 +223,22 @@ jobs:
       REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
       REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
 
-  deploy_staging:
+  deploy_test:
     needs:
       - resolve_inputs
       - promote_release
-    if: ${{ github.ref_type == 'tag' }}
+    if: ${{ github.ref_type == 'tag' && needs.resolve_inputs.outputs.environment_test_enabled == 'true' }}
     uses: ./.github/workflows/deploy-environment.yml
     with:
       project-name: ${{ needs.resolve_inputs.outputs.project_name }}
-      environment: staging
+      environment: test
       image-version: ${{ github.ref_name }}
       deployment-repository: ${{ needs.resolve_inputs.outputs.deployment_repository }}
       deployment-source-root: ${{ needs.resolve_inputs.outputs.deployment_source_root }}
       deployment-target-root: ${{ needs.resolve_inputs.outputs.deployment_target_root }}
       compose-file: ${{ needs.resolve_inputs.outputs.compose_file }}
       expected-images-json: ${{ needs.promote_release.outputs.image-repositories-json }}
+      environment-url: ${{ needs.resolve_inputs.outputs.environment_test_url }}
     secrets:
       DEPLOYMENT_TOKEN: ${{ secrets.DEPLOYMENT_TOKEN }}
 
@@ -192,8 +246,8 @@ jobs:
     needs:
       - resolve_inputs
       - promote_release
-      - deploy_staging
-    if: ${{ github.ref_type == 'tag' }}
+      - deploy_test
+    if: ${{ always() && github.ref_type == 'tag' && needs.promote_release.result == 'success' && needs.resolve_inputs.outputs.environment_prod_enabled == 'true' && (needs.deploy_test.result == 'success' || needs.deploy_test.result == 'skipped') }}
     uses: ./.github/workflows/deploy-environment.yml
     with:
       project-name: ${{ needs.resolve_inputs.outputs.project_name }}
@@ -204,5 +258,6 @@ jobs:
       deployment-target-root: ${{ needs.resolve_inputs.outputs.deployment_target_root }}
       compose-file: ${{ needs.resolve_inputs.outputs.compose_file }}
       expected-images-json: ${{ needs.promote_release.outputs.image-repositories-json }}
+      environment-url: ${{ needs.resolve_inputs.outputs.environment_prod_url }}
     secrets:
       DEPLOYMENT_TOKEN: ${{ secrets.DEPLOYMENT_TOKEN }}
