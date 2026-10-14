@@ -119,16 +119,22 @@ jobs:
           env_prod=$(jq -e -c '.prod // {}' <<<"$environments")
 
           env_dev_enabled=$(jq -e -r '
-            .enabled // true
-            | if type == "boolean" then . else error("environments.dev.enabled must be a boolean") end
+            if .enabled == null then true
+            elif (.enabled | type) == "boolean" then .enabled
+            else error("environments.dev.enabled must be a boolean")
+            end
           ' <<<"$env_dev")
           env_staging_enabled=$(jq -e -r '
-            .enabled // true
-            | if type == "boolean" then . else error("environments.staging.enabled must be a boolean") end
+            if .enabled == null then true
+            elif (.enabled | type) == "boolean" then .enabled
+            else error("environments.staging.enabled must be a boolean")
+            end
           ' <<<"$env_staging")
           env_prod_enabled=$(jq -e -r '
-            .enabled // true
-            | if type == "boolean" then . else error("environments.prod.enabled must be a boolean") end
+            if .enabled == null then true
+            elif (.enabled | type) == "boolean" then .enabled
+            else error("environments.prod.enabled must be a boolean")
+            end
           ' <<<"$env_prod")
 
           env_dev_url=$(jq -e -r '
