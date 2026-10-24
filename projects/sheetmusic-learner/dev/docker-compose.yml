@@ -16,7 +16,7 @@ services:
       retries: 5
 
   backend:
-    image: registry.cloud.rafaelurben.ch/rafaelurben/sheetmusic-learner-backend:9a4887bcebedd616038fbbc4af21511e2fec1260
+    image: registry.cloud.rafaelurben.ch/rafaelurben/sheetmusic-learner-backend:db727be888c6e56013543d91a1f170326358d1fb
     restart: unless-stopped
     depends_on:
       postgresdb:
@@ -40,7 +40,7 @@ services:
       retries: 5
 
   frontend:
-    image: registry.cloud.rafaelurben.ch/rafaelurben/sheetmusic-learner-frontend:9a4887bcebedd616038fbbc4af21511e2fec1260
+    image: registry.cloud.rafaelurben.ch/rafaelurben/sheetmusic-learner-frontend:db727be888c6e56013543d91a1f170326358d1fb
     restart: unless-stopped
     depends_on:
       backend:
